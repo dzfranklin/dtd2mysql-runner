@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: dtd2mysql-runner
+  namespace: nationalrail-gtfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dtd2mysql-runner
+  template:
+    metadata:
+      labels:
+        app: dtd2mysql-runner
+      annotations:
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portName: "metrics"
+        k8s.grafana.com/job: "togeojson-server"
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/dzfranklin/dtd2mysql-runner
+          ports:
+            - name: metrics
+              containerPort: 2112
+          env:
+            - name: SNAPSHOT_ID
+              value: "180489058"
+            - name: HCLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hcloud
+                  key: token
+            - name: SSH_PRIVATE_KEY_BASE64
+              valueFrom:
+                secretKeyRef:
+                  name: ssh-key
+                  key: private_key_base64
+            - name: NATIONAL_RAIL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: national-rail
+                  key: username
+            - name: NATIONAL_RAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: national-rail
+                  key: password
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio
+                  key: access_key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio
+                  key: secret_key
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: metrics
