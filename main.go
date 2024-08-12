@@ -41,8 +41,8 @@ const (
 var (
 	lastDownloadGauge = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: promNS,
-		Name:      "latest_timetable_downloaded_at_millis_gauge",
-		Help:      "The time the latest timetable processed was downloaded from national rail in unix millis",
+		Name:      "latest_timetable_downloaded_at_unix_gauge",
+		Help:      "The time the latest timetable processed was downloaded from national rail in unix seconds",
 	})
 	runtimeGauge = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: promNS,
@@ -209,7 +209,7 @@ func run(
 		return err
 	}
 
-	lastDownloadGauge.Set(float64(downloadTime.UnixMilli()))
+	lastDownloadGauge.Set(float64(downloadTime.Unix()))
 	runtimeGauge.Set(float64(time.Since(startTime)) / float64(time.Minute))
 
 	return nil
@@ -428,7 +428,7 @@ func uploadOutput(ctx context.Context, sftpClient *sftp.Client, mc *minio.Client
 		return err
 	}
 
-	fmt.Printf("Uploaded %s/%s", outputBucket, outputName)
+	fmt.Printf("Uploaded %s/%s\n", outputBucket, outputName)
 	return nil
 }
 

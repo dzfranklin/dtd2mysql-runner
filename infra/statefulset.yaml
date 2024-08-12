@@ -4,6 +4,7 @@ metadata:
   name: dtd2mysql-runner
   namespace: nationalrail-gtfs
 spec:
+  serviceName: dtd2mysql-runner
   replicas: 1
   selector:
     matchLabels:
@@ -15,7 +16,7 @@ spec:
       annotations:
         k8s.grafana.com/scrape: "true"
         k8s.grafana.com/metrics.portName: "metrics"
-        k8s.grafana.com/job: "togeojson-server"
+        k8s.grafana.com/job: "dtd2mysql-runner"
     spec:
       containers:
         - name: server
