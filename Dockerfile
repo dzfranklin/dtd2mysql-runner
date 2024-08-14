@@ -15,6 +15,6 @@ FROM ubuntu:20.04 AS release
 
 WORKDIR /app
 
-COPY --from=build /dtd2mysql-runner /app/dtd2mysql-runner
+COPY --from=build /dtd2mysql-runner /dtd2mysql-runner
 
-ENTRYPOINT ["/app/dtd2mysql-runner"]
+ENTRYPOINT ["/dtd2mysql-runner"]
