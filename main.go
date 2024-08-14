@@ -52,11 +52,12 @@ var (
 )
 
 const (
-	serverTypeName = "cax21"
-	sshKeyName     = "dtd2mysql-runner"
-	locationName   = "nbg1"
-	outputBucket   = "nationalrail-gtfs"
-	outputName     = "timetable.gtfs.zip"
+	serverTypeName     = "cax21"
+	sshKeyName         = "dtd2mysql-runner"
+	locationName       = "nbg1"
+	outputBucket       = "nationalrail-gtfs"
+	outputName         = "timetable.gtfs.zip"
+	scotlandOutputName = "timetable-scotland.gtfs.zip"
 )
 
 func main() {
@@ -414,21 +415,32 @@ func runEntrypoint(ctx context.Context, sshClient *ssh.Client) error {
 func uploadOutput(ctx context.Context, sftpClient *sftp.Client, mc *minio.Client) error {
 	fmt.Println("Uploading output")
 
-	f, err := sftpClient.Open("/data/output.gtfs.zip")
-	if err != nil {
-		return err
-	}
-	stat, err := f.Stat()
-	if err != nil {
-		return err
-	}
-
-	_, err = mc.PutObject(ctx, outputBucket, outputName, f, stat.Size(), minio.PutObjectOptions{})
-	if err != nil {
-		return err
+	outputs := []struct {
+		path string
+		name string
+	}{
+		{path: "/data/output.gtfs.zip", name: outputName},
+		{path: "/data/output_scotland.gtfs.zip", name: scotlandOutputName},
 	}
 
-	fmt.Printf("Uploaded %s/%s\n", outputBucket, outputName)
+	for _, outputInfo := range outputs {
+		f, err := sftpClient.Open(outputInfo.path)
+		if err != nil {
+			return err
+		}
+		stat, err := f.Stat()
+		if err != nil {
+			return err
+		}
+
+		_, err = mc.PutObject(ctx, outputBucket, outputInfo.name, f, stat.Size(), minio.PutObjectOptions{})
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Uploaded %s/%s\n", outputBucket, outputInfo.name)
+	}
+
 	return nil
 }
 

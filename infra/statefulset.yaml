@@ -26,7 +26,7 @@ spec:
               containerPort: 2112
           env:
             - name: SNAPSHOT_ID
-              value: "180489058"
+              value: "181460171"
             - name: HCLOUD_TOKEN
               valueFrom:
                 secretKeyRef:
