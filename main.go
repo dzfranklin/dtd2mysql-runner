@@ -58,6 +58,7 @@ const (
 	outputBucket       = "nationalrail-gtfs"
 	outputName         = "timetable.gtfs.zip"
 	scotlandOutputName = "timetable-scotland.gtfs.zip"
+	samplesBucket      = "nationalrail-cif-samples"
 )
 
 func main() {
@@ -195,12 +196,17 @@ func run(
 	}
 
 	downloadTime := time.Now()
-	err = fetchInput(ctx, sftpClient, nationalRailUsername, nationalRailPassword)
+	inputPath, err := fetchInput(ctx, nationalRailUsername, nationalRailPassword)
 	if err != nil {
 		return err
 	}
 
-	err = runEntrypoint(ctx, sshClient)
+	err = saveSample(ctx, mc, inputPath)
+	if err != nil {
+		return err
+	}
+
+	err = runEntrypoint(ctx, sshClient, sftpClient, inputPath)
 	if err != nil {
 		return err
 	}
@@ -214,6 +220,13 @@ func run(
 	runtimeGauge.Set(float64(time.Since(startTime)) / float64(time.Minute))
 
 	return nil
+}
+
+func saveSample(ctx context.Context, mc *minio.Client, filepath string) error {
+	name := time.Now().Format("2006-01-02_150405") + ".cif.zip"
+	_, err := mc.FPutObject(ctx, samplesBucket, name, filepath, minio.PutObjectOptions{})
+	fmt.Println("Saved to", samplesBucket, "/", name)
+	return err
 }
 
 func createServer(ctx context.Context, hc *hcloud.Client, snapshotID int64) (*hcloud.Server, error) {
@@ -309,72 +322,96 @@ func dialServer(ctx context.Context, srv *hcloud.Server, sshSigner ssh.Signer) (
 	}
 }
 
-func fetchInput(ctx context.Context, sftpClient *sftp.Client, nationalRailUsername, nationalRailPassword string) error {
+func fetchInput(ctx context.Context, nationalRailUsername, nationalRailPassword string) (string, error) {
 	httpClient := &http.Client{}
+
+	out, err := os.CreateTemp("", "")
 
 	authValues := url.Values{}
 	authValues.Set("username", nationalRailUsername)
 	authValues.Set("password", nationalRailPassword)
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://opendata.nationalrail.co.uk/authenticate", strings.NewReader(authValues.Encode()))
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("authenticate status %s: %s", resp.Status, string(body))
+		return "", fmt.Errorf("authenticate status %s: %s", resp.Status, string(body))
 	}
 	var authResp struct {
 		Token string `json:"token"`
 	}
 	err = json.Unmarshal(body, &authResp)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fmt.Println("Authenticated with national rail")
 
 	req, err = http.NewRequestWithContext(ctx, "GET", "https://opendata.nationalrail.co.uk/api/staticfeeds/3.0/timetable", nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("X-Auth-Token", authResp.Token)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("get timetable status %s: %s", resp.Status, string(body))
+		return "", fmt.Errorf("get timetable status %s: %s", resp.Status, string(body))
 	}
 
-	out, err := sftpClient.Create("/data/input.cif.zip")
-	if err != nil {
-		return err
-	}
-	defer func(out *sftp.File) {
-		_ = out.Close()
-	}(out)
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
+		return "", err
+	}
+
+	err = out.Close()
+	if err != nil {
+		return "", err
+	}
+
+	fmt.Println("Downloaded timetable")
+	return out.Name(), nil
+}
+
+func runEntrypoint(ctx context.Context, sshClient *ssh.Client, sftpClient *sftp.Client, inputPath string) error {
+	fmt.Println("Copying input.cif.zip")
+
+	inputSrc, err := os.Open(inputPath)
+	if err != nil {
 		return err
 	}
-	err = out.Close()
+	defer func() {
+		_ = inputSrc.Close()
+	}()
+
+	inputDst, err := sftpClient.Create("/data/input.cif.zip")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = inputDst.Close()
+	}()
+
+	_, err = io.Copy(inputDst, inputSrc)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Copied timetable to server")
-	return nil
-}
+	err = inputDst.Close()
+	if err != nil {
+		return err
+	}
 
-func runEntrypoint(ctx context.Context, sshClient *ssh.Client) error {
 	fmt.Println("Running entrypoint")
 
 	sess, err := sshClient.NewSession()
