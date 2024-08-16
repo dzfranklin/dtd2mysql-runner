@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dzfranklin/dtd2mysql-runner/clips"
+	"github.com/dzfranklin/gtfs2sqlite"
 	"github.com/hetznercloud/hcloud-go/v2/hcloud"
 	"github.com/joho/godotenv"
 	"github.com/minio/minio-go/v7"
@@ -24,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -212,8 +215,25 @@ func run(
 		return err
 	}
 
-	err = uploadOutput(ctx, sftpClient, mc)
+	outputDir, err := os.MkdirTemp("", "")
 	if err != nil {
+		return err
+	}
+	rawOutput := path.Join(outputDir, "raw.gtfs.zip")
+
+	if err := downloadOutput(ctx, sftpClient, rawOutput); err != nil {
+		return err
+	}
+
+	if err := processOutput(rawOutput, outputDir); err != nil {
+		return err
+	}
+
+	if err := os.Remove(rawOutput); err != nil {
+		return err
+	}
+
+	if err := uploadOutputs(ctx, mc, outputDir); err != nil {
 		return err
 	}
 
@@ -450,33 +470,75 @@ func runEntrypoint(ctx context.Context, sshClient *ssh.Client, sftpClient *sftp.
 	return nil
 }
 
-func uploadOutput(ctx context.Context, sftpClient *sftp.Client, mc *minio.Client) error {
-	fmt.Println("Uploading output")
+func downloadOutput(ctx context.Context, sftpClient *sftp.Client, path string) error {
+	remoteF, err := sftpClient.Open("/data/output.gtfs.zip")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = remoteF.Close()
+	}()
 
-	outputs := []struct {
-		path string
-		name string
-	}{
-		{path: "/data/output.gtfs.zip", name: outputName},
-		{path: "/data/output_scotland.gtfs.zip", name: scotlandOutputName},
+	localF, err := os.Create(path)
+	if err != nil {
+		return err
 	}
 
-	for _, outputInfo := range outputs {
-		f, err := sftpClient.Open(outputInfo.path)
-		if err != nil {
-			return err
-		}
-		stat, err := f.Stat()
-		if err != nil {
-			return err
-		}
+	byteSize, err := io.Copy(localF, remoteF)
+	if err != nil {
+		return err
+	}
 
-		_, err = mc.PutObject(ctx, outputBucket, outputInfo.name, f, stat.Size(), minio.PutObjectOptions{})
-		if err != nil {
+	fmt.Println("Copied output.gtfs.zip:", byteSize, "bytes")
+	return localF.Close()
+}
+
+func processOutput(output string, dir string) error {
+	scratch, err := os.MkdirTemp("", "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(scratch) }()
+
+	allDB := path.Join(scratch, "all.db")
+	if _, err := gtfs2sqlite.Import(output, allDB, &gtfs2sqlite.ImportOpts{ForceValid: true}); err != nil {
+		return err
+	}
+	if err := gtfs2sqlite.Export(allDB, path.Join(dir, "timetable.gtfs.zip"), nil); err != nil {
+		return err
+	}
+
+	for name, clipFeature := range clips.Get() {
+		clippedDB := path.Join(scratch, "clip_"+name+".db")
+		if err := gtfs2sqlite.Clip(allDB, clippedDB, clipFeature); err != nil {
 			return err
 		}
+		if err := gtfs2sqlite.Export(clippedDB, path.Join(dir, "timetable_"+name+".gtfs.zip"), nil); err != nil {
+			return err
+		}
+	}
 
-		fmt.Printf("Uploaded %s/%s\n", outputBucket, outputInfo.name)
+	if err := os.RemoveAll(scratch); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func uploadOutputs(ctx context.Context, mc *minio.Client, dir string) error {
+	fmt.Println("Uploading output")
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		entryPath := path.Join(dir, entry.Name())
+		if _, err := mc.FPutObject(ctx, outputBucket, entry.Name(), entryPath, minio.PutObjectOptions{}); err != nil {
+			return err
+		}
+		fmt.Println("Uploaded", entry.Name(), "to", outputBucket)
 	}
 
 	return nil
