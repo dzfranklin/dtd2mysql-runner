@@ -110,6 +110,7 @@ func main() {
 		cancel()
 	}()
 
+mainloop:
 	for {
 		err = run(
 			ctx,
@@ -122,7 +123,7 @@ func main() {
 			minioSecretKey,
 		)
 		if errors.Is(err, context.Canceled) {
-			break
+			break mainloop
 		} else if err != nil {
 			slog.Error("Failed to run", "error", err)
 		}
@@ -133,10 +134,10 @@ func main() {
 		select {
 		case <-ctx.Done():
 			fmt.Println("Cancelling sleep")
-			break
+			break mainloop
 		case <-timer.C:
 			fmt.Println("Done sleeping")
-			continue
+			continue mainloop
 		}
 	}
 
